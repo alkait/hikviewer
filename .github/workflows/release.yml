@@ -129,7 +129,7 @@ jobs:
             **Recommended — one Terminal command, zero Gatekeeper friction:**
 
             ```
-            /bin/bash -c "$(curl -fsSL https://github.com/alkait/hikviewer/releases/latest/download/install.sh)"
+            /bin/bash -c "$(curl -fsSL https://github.com/alkait/HikViewer/releases/latest/download/install.sh)"
             ```
 
             `curl`-downloaded files don't carry the `com.apple.quarantine`

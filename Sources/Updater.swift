@@ -12,7 +12,7 @@ import AppKit
 enum Updater {
     /// GitHub owner/name this app self-updates from. Must match REPO in
     /// build/install.sh and the asset URLs in .github/workflows/release.yml.
-    static let repoSlug = "alkait/hikviewer"
+    static let repoSlug = "alkait/HikViewer"
 
     /// releases/latest always resolves to the newest tagged (non-pre-release)
     /// release, so this URL never goes stale.

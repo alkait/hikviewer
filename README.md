@@ -16,7 +16,7 @@ SHA-256, and installs a quarantine-free `HikViewer.app` into `/Applications`
 (the app is ad-hoc signed; browser downloads would trip Gatekeeper):
 
 ```sh
-/bin/bash -c "$(curl -fsSL https://github.com/alkait/hikviewer/releases/latest/download/install.sh)"
+/bin/bash -c "$(curl -fsSL https://github.com/alkait/HikViewer/releases/latest/download/install.sh)"
 ```
 
 Installed apps update themselves: **HikViewer → Check for Updates…** (also

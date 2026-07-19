@@ -2,7 +2,7 @@
 # HikViewer curl|bash installer.
 #
 # Usage:
-#   /bin/bash -c "$(curl -fsSL https://github.com/alkait/hikviewer/releases/latest/download/install.sh)"
+#   /bin/bash -c "$(curl -fsSL https://github.com/alkait/HikViewer/releases/latest/download/install.sh)"
 #
 # Why this exists:
 #   HikViewer is open-source and ad-hoc signed (no Apple Developer account).
@@ -36,7 +36,7 @@
 
 set -euo pipefail
 
-REPO="alkait/hikviewer"
+REPO="alkait/HikViewer"
 DEST="/Applications/HikViewer.app"
 ASSET="HikViewer-macos-universal.app.zip"
 
