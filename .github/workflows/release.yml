@@ -36,7 +36,10 @@ permissions:
 jobs:
   build:
     name: macOS universal
-    runs-on: macos-14
+    # macos-15 minimum: Sources/SupplementaryViews.swift uses the
+    # NSCursor.frameResize API, which needs the macOS 15 SDK to compile
+    # (the #available guard only covers runtime).
+    runs-on: macos-15
     timeout-minutes: 15
 
     steps:
