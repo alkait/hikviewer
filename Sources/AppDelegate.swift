@@ -80,7 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(grid)
-        if Settings.startFullScreen { window.toggleFullScreen(nil) }
+        // Skip auto-fullscreen when unconfigured: the Settings window that
+        // opens on first run would land behind the fullscreen space.
+        if Settings.startFullScreen && Settings.isConfigured { window.toggleFullScreen(nil) }
         NSApp.activate(ignoringOtherApps: true)
 
         if Settings.isConfigured && !Settings.cameras.isEmpty {
