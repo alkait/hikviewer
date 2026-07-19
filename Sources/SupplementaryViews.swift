@@ -6,7 +6,7 @@ import AVFoundation
 import CoreMedia
 
 /// One floating pane: a small video view that can be dragged anywhere,
-/// resized from its bottom-right corner, closed with ✕, and promoted to the
+/// resized from any edge or corner, closed with ✕, and promoted to the
 /// main view by double-click. Frames come from outside via enqueue() — the
 /// live substream tap or a synced PlaybackStream, the pane doesn't care.
 final class SupplementaryTile: NSView {
@@ -33,7 +33,16 @@ final class SupplementaryTile: NSView {
     /// loop stops retrying once this flips.
     var hasVideo: Bool { videoOnScreen }
 
-    private enum DragMode { case none, move, resize }
+    /// Which edges a resize drag moves — corners carry two.
+    private struct ResizeEdges: OptionSet {
+        let rawValue: Int
+        static let n = ResizeEdges(rawValue: 1)   // top
+        static let s = ResizeEdges(rawValue: 2)   // bottom
+        static let e = ResizeEdges(rawValue: 4)   // right
+        static let w = ResizeEdges(rawValue: 8)   // left
+    }
+
+    private enum DragMode: Equatable { case none, move, resize(ResizeEdges) }
     private var dragMode = DragMode.none
     private var dragStartPoint = NSPoint.zero
     private var dragStartFrame = NSRect.zero
@@ -67,9 +76,14 @@ final class SupplementaryTile: NSView {
 
         closeButton.isBordered = false
         closeButton.attributedTitle = NSAttributedString(string: "✕", attributes: [
-            .foregroundColor: NSColor.white.withAlphaComponent(0.8),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.9),
             .font: NSFont.systemFont(ofSize: 11, weight: .bold),
         ])
+        // Dark disc behind the glyph — a bare white ✕ vanishes over
+        // white-ish video (sky, walls). Same backing tint as the name label.
+        closeButton.wantsLayer = true
+        closeButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        closeButton.layer?.cornerRadius = 8   // circular at the 16×16 frame
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
         addSubview(closeButton)
@@ -140,25 +154,78 @@ final class SupplementaryTile: NSView {
         CATransaction.commit()
         nameLabel.frame.origin = NSPoint(x: 4, y: bounds.height - nameLabel.frame.height - 4)
         closeButton.frame = NSRect(x: bounds.width - 20, y: bounds.height - 20, width: 16, height: 16)
+        window?.invalidateCursorRects(for: self)   // zones track the new size
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        // Resize grip: diagonal lines in the bottom-right corner.
-        NSColor.white.withAlphaComponent(0.6).setStroke()
-        for i in 1...4 {
-            let inset = CGFloat(i) * 5
-            let p = NSBezierPath()
-            p.move(to: NSPoint(x: bounds.width - inset, y: 3))
-            p.line(to: NSPoint(x: bounds.width - 3, y: inset))
-            p.lineWidth = 1.5
-            p.stroke()
-        }
+    // Resize hit zones: a thin band along each edge, widened at the corners
+    // so the diagonal grabs have a fatter target.
+    private static let edgeBand: CGFloat = 10
+    private static let cornerReach: CGFloat = 18
+
+    // Real window-style resize cursors arrived as API in macOS 15
+    // (NSCursor.frameResize); older systems fall back to the closest
+    // public cursors.
+    private static let cursorNS: NSCursor = {
+        if #available(macOS 15.0, *) { return .frameResize(position: .top, directions: .all) }
+        return .resizeUpDown
+    }()
+    private static let cursorEW: NSCursor = {
+        if #available(macOS 15.0, *) { return .frameResize(position: .left, directions: .all) }
+        return .resizeLeftRight
+    }()
+    private static let cursorNWSE: NSCursor = {   // "\" diagonal: top-left / bottom-right
+        if #available(macOS 15.0, *) { return .frameResize(position: .topLeft, directions: .all) }
+        return .crosshair
+    }()
+    private static let cursorNESW: NSCursor = {   // "/" diagonal: top-right / bottom-left
+        if #available(macOS 15.0, *) { return .frameResize(position: .topRight, directions: .all) }
+        return .crosshair
+    }()
+
+    /// Which resize zone (if any) a point falls in. Empty = interior = move.
+    private func resizeEdges(at p: NSPoint) -> ResizeEdges {
+        // The ✕ button owns the top-right corner — never offer resize where a
+        // click would actually close the pane.
+        if closeButton.frame.insetBy(dx: -4, dy: -4).contains(p) { return [] }
+        let t = Self.edgeBand, c = Self.cornerReach
+        var e = ResizeEdges()
+        if p.x < t { e.insert(.w) }
+        if p.x > bounds.width - t { e.insert(.e) }
+        if p.y < t { e.insert(.s) }
+        if p.y > bounds.height - t { e.insert(.n) }
+        // Corner reach: within c of two edges counts as that corner even
+        // when outside the thin band on one axis.
+        if p.x < c && p.y < c { e = [.w, .s] }
+        if p.x > bounds.width - c && p.y < c { e = [.e, .s] }
+        if p.x < c && p.y > bounds.height - c { e = [.w, .n] }
+        if p.x > bounds.width - c && p.y > bounds.height - c { e = [.e, .n] }
+        return e
     }
 
     override func resetCursorRects() {
-        let grip = NSRect(x: bounds.width - 24, y: 0, width: 24, height: 24)
-        addCursorRect(bounds, cursor: .openHand)
-        addCursorRect(grip, cursor: .crosshair)
+        let b = bounds
+        let t = Self.edgeBand, c = Self.cornerReach
+        addCursorRect(b, cursor: .openHand)
+        // Edges, between the corner squares.
+        addCursorRect(NSRect(x: c, y: b.height - t, width: max(0, b.width - 2 * c), height: t), cursor: Self.cursorNS)
+        addCursorRect(NSRect(x: c, y: 0, width: max(0, b.width - 2 * c), height: t), cursor: Self.cursorNS)
+        addCursorRect(NSRect(x: 0, y: c, width: t, height: max(0, b.height - 2 * c)), cursor: Self.cursorEW)
+        addCursorRect(NSRect(x: b.width - t, y: c, width: t, height: max(0, b.height - 2 * c)), cursor: Self.cursorEW)
+        // Corners. The top-right square is skipped: the ✕ button sits there
+        // and a resize cursor over a close control would mislead.
+        addCursorRect(NSRect(x: 0, y: b.height - c, width: c, height: c), cursor: Self.cursorNWSE)
+        addCursorRect(NSRect(x: b.width - c, y: 0, width: c, height: c), cursor: Self.cursorNWSE)
+        addCursorRect(NSRect(x: 0, y: 0, width: c, height: c), cursor: Self.cursorNESW)
+    }
+
+    /// Min/max pane size within a superview — shared by clamped() and the
+    /// resize drag (which must clamp size before anchoring fixed edges).
+    private func clampSize(_ s: NSSize, in sup: NSView) -> NSSize {
+        var s = s
+        let minW = max(120, sup.bounds.width * 0.15)
+        s.width = min(max(s.width, minW), sup.bounds.width * 0.5)
+        s.height = min(max(s.height, 70), sup.bounds.height * 0.6)
+        return s
     }
 
     /// Clamp a frame into the superview, respecting the bar inset and
@@ -166,11 +233,7 @@ final class SupplementaryTile: NSView {
     func clamped(_ f: NSRect) -> NSRect {
         guard let sup = superview else { return f }
         var r = f
-        let minW = max(120, sup.bounds.width * 0.15)
-        let maxW = sup.bounds.width * 0.5
-        r.size.width = min(max(r.width, minW), maxW)
-        let maxH = sup.bounds.height * 0.6
-        r.size.height = min(max(r.height, 70), maxH)
+        r.size = clampSize(r.size, in: sup)
         r.origin.x = min(max(2, r.origin.x), max(2, sup.bounds.width - r.width - 2))
         r.origin.y = min(max(bottomInset + 2, r.origin.y), max(bottomInset + 2, sup.bounds.height - r.height - 2))
         return r
@@ -183,8 +246,8 @@ final class SupplementaryTile: NSView {
         layer?.zPosition = 50
         dragStartPoint = event.locationInWindow
         dragStartFrame = frame
-        let p = convert(event.locationInWindow, from: nil)
-        dragMode = (p.x > bounds.width - 24 && p.y < 24) ? .resize : .move
+        let edges = resizeEdges(at: convert(event.locationInWindow, from: nil))
+        dragMode = edges.isEmpty ? .move : .resize(edges)
         if dragMode == .move { NSCursor.closedHand.set() }
     }
 
@@ -194,12 +257,17 @@ final class SupplementaryTile: NSView {
         switch dragMode {
         case .move:
             frame = clamped(dragStartFrame.offsetBy(dx: dx, dy: dy))
-        case .resize:
-            let top = dragStartFrame.maxY
+        case .resize(let edges):
             var r = dragStartFrame
-            r.size.width = dragStartFrame.width + dx
-            r.size.height = dragStartFrame.height - dy
-            r.origin.y = top - r.size.height
+            if edges.contains(.e) { r.size.width += dx }
+            if edges.contains(.w) { r.size.width -= dx }
+            if edges.contains(.n) { r.size.height += dy }
+            if edges.contains(.s) { r.size.height -= dy }
+            // Clamp size first, then re-anchor: dragging one edge must keep
+            // the opposite edge fixed even when the min/max clamp kicks in.
+            if let sup = superview { r.size = clampSize(r.size, in: sup) }
+            if edges.contains(.w) { r.origin.x = dragStartFrame.maxX - r.width }
+            if edges.contains(.s) { r.origin.y = dragStartFrame.maxY - r.height }
             frame = clamped(r)
         case .none:
             return
