@@ -97,6 +97,34 @@ final class SupplementaryManager {
         applyFrames()
         rebuildLiveSinks()
         persist()
+
+        // Same anti-black-screen tricks as the grid (rebuildStreams): paint
+        // the last-known snapshot instantly, refresh it from the camera, and
+        // nudge an immediate IDR — the live tap joins the substream mid-GOP
+        // and drops everything until a keyframe flows past. Playback panes
+        // skip this: a live snapshot would show the wrong point in time, and
+        // their PlaybackStream starts on a keyframe anyway.
+        guard !playbackActive else { return }
+        let host = camera.host
+        if let cached = SnapshotCache.load(host: host) {
+            v.setPlaceholder(cached, cached: true)
+        }
+        ISAPI.snapshot(host: host, channel: channel) { [weak v] data in
+            guard let data, let image = NSImage(data: data) else { return }
+            SnapshotCache.save(host: host, jpeg: data)
+            DispatchQueue.main.async { v?.setPlaceholder(image, cached: false) }
+        }
+        nudgeKeyFrame(host: host, view: v, attempt: 0)
+    }
+
+    /// Some firmware ignores a single requestKeyFrame — retry once a second
+    /// until the pane renders its first frame (same as CameraStream.launch).
+    private func nudgeKeyFrame(host: String, view: SupplementaryTile?, attempt: Int) {
+        guard let view, !view.hasVideo, attempt < 3, !playbackActive else { return }
+        ISAPI.requestKeyFrame(host: host, channel: channel)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self, weak view] in
+            self?.nudgeKeyFrame(host: host, view: view, attempt: attempt + 1)
+        }
     }
 
     /// Bring back the last-used set for the attached main camera.

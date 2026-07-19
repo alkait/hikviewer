@@ -21,11 +21,17 @@ final class SupplementaryTile: NSView {
     var bottomInset: CGFloat = 0          // keep clear of the playback bar
 
     private let displayLayer = AVSampleBufferDisplayLayer()
+    private let placeholderLayer = CALayer()
     private let nameLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton(title: "", target: nil, action: nil)
 
     private let feedQueue = DispatchQueue(label: "supp.feed")
     private var waitingForSync = true
+    private var startedVideo = false      // feedQueue
+    private var videoOnScreen = false     // main thread
+    /// Whether a real frame has rendered (main thread) — the keyframe nudge
+    /// loop stops retrying once this flips.
+    var hasVideo: Bool { videoOnScreen }
 
     private enum DragMode { case none, move, resize }
     private var dragMode = DragMode.none
@@ -46,7 +52,11 @@ final class SupplementaryTile: NSView {
 
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.black.cgColor
+        displayLayer.zPosition = -1
         layer?.addSublayer(displayLayer)
+        placeholderLayer.contentsGravity = .resizeAspect
+        placeholderLayer.zPosition = -0.5
+        layer?.addSublayer(placeholderLayer)
 
         nameLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         nameLabel.textColor = .white
@@ -73,6 +83,17 @@ final class SupplementaryTile: NSView {
         needsLayout = true
     }
 
+    /// JPEG shown until the first live frame replaces it. A `cached` frame is
+    /// last-known (possibly stale) — dimmed so it's never mistaken for live.
+    func setPlaceholder(_ image: NSImage, cached: Bool) {
+        guard !videoOnScreen else { return }
+        var rect = NSRect(origin: .zero, size: image.size)
+        if let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) {
+            placeholderLayer.contents = cg
+        }
+        placeholderLayer.opacity = cached ? 0.75 : 1.0
+    }
+
     /// Drop frames until the next keyframe — call whenever the source behind
     /// this pane changes (live<->playback, seeks).
     func resync() {
@@ -92,6 +113,13 @@ final class SupplementaryTile: NSView {
                 guard isSync else { return }
                 self.waitingForSync = false
             }
+            if !self.startedVideo {
+                self.startedVideo = true
+                DispatchQueue.main.async {
+                    self.videoOnScreen = true
+                    self.placeholderLayer.isHidden = true
+                }
+            }
             if #available(macOS 14.0, *) {
                 let r = self.displayLayer.sampleBufferRenderer
                 if r.status == .failed { r.flush() }
@@ -108,6 +136,7 @@ final class SupplementaryTile: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         displayLayer.frame = bounds
+        placeholderLayer.frame = bounds
         CATransaction.commit()
         nameLabel.frame.origin = NSPoint(x: 4, y: bounds.height - nameLabel.frame.height - 4)
         closeButton.frame = NSRect(x: bounds.width - 20, y: bounds.height - 20, width: 16, height: 16)
