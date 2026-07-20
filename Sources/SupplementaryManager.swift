@@ -146,7 +146,11 @@ final class SupplementaryManager {
         panes[i].view.removeFromSuperview()
         panes.remove(at: i)
         rebuildLiveSinks()
-        persist()
+        // No persist: closing panes must not shrink the saved set, so
+        // closing all of them (in any order) leaves the full last set behind
+        // the selector's "↺ Restore last" row. The saved set tracks adds,
+        // drags/resizes, and teardown — a set trimmed deliberately gets
+        // persisted at teardown, when panes are still up.
     }
 
     /// Remove every pane (saving the layout for restore). Safe to call twice.

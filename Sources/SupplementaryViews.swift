@@ -221,6 +221,9 @@ final class SupplementaryTile: NSView {
         addCursorRect(NSRect(x: 0, y: b.height - c, width: c, height: c), cursor: Self.cursorNWSE)
         addCursorRect(NSRect(x: b.width - c, y: 0, width: c, height: c), cursor: Self.cursorNWSE)
         addCursorRect(NSRect(x: 0, y: 0, width: c, height: c), cursor: Self.cursorNESW)
+        // The ✕ button is a click target, not a grab area — plain arrow
+        // (last added wins over the open-hand base rect).
+        addCursorRect(closeButton.frame.insetBy(dx: -4, dy: -4), cursor: .arrow)
     }
 
     /// Min/max pane size within a superview — shared by clamped() and the
