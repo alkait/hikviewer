@@ -21,7 +21,7 @@ final class PlaybackController {
     private let clockFmt: DateFormatter
 
     private var stream: PlaybackStream?
-    private var speed = 1                           // 1 / 2 / 4 ×
+    private var speed = Settings.playbackSpeed      // 1 / 2 / 4 ×, shared across cameras
     private var lastStart = Date.distantPast        // guards a fail-retry loop
 
     // Timeline zoom: preset windows into the day; resets to 24h per day.
@@ -96,10 +96,11 @@ final class PlaybackController {
         bar.onHumanTap = { [weak self] in self?.toggleMotionFilter(human: true) }
         bar.onVehicleTap = { [weak self] in self?.toggleMotionFilter(human: false) }
         bar.setTimeZone(client.timeZone)
+        bar.setSpeed("\(speed)×")
         tile.setFeed(.playback)
 
-        // Each camera remembers its motion filter across sessions; a camera
-        // without a saved choice defaults to both filters ON (human+vehicle).
+        // The motion filter is one global choice shared across cameras (like
+        // speed); with nothing saved it defaults to both ON (human+vehicle).
         let savedFilter = UserDefaults.standard.stringArray(forKey: filterDefaultsKey) ?? ["human", "vehicle"]
         humanFilter = savedFilter.contains("human")
         vehicleFilter = savedFilter.contains("vehicle")
@@ -165,6 +166,7 @@ final class PlaybackController {
     func cycleSpeed() {
         let speeds = [1, 2, 4]
         speed = speeds[((speeds.firstIndex(of: speed) ?? 0) + 1) % speeds.count]
+        Settings.playbackSpeed = speed
         bar.setSpeed("\(speed)×")
         if pausedAt == nil { startPlayback(at: position()) }
     }
@@ -308,7 +310,7 @@ final class PlaybackController {
 
     // MARK: motion highlights
 
-    private var filterDefaultsKey: String { "motionFilter." + camera.host }
+    private let filterDefaultsKey = "motionFilter"
 
     private func toggleMotionFilter(human: Bool) {
         if human { humanFilter.toggle() } else { vehicleFilter.toggle() }

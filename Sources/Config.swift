@@ -112,6 +112,23 @@ enum Settings {
         get { UserDefaults.standard.object(forKey: "startFullScreen") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "startFullScreen") }
     }
+
+    /// Reopen where the user left off (grid vs. camera view, playback
+    /// position, panes). Gates restoring only — state is always recorded, so
+    /// switching it back on picks up the current session, not a stale one.
+    static var rememberLastView: Bool {
+        get { UserDefaults.standard.object(forKey: "rememberLastView") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "rememberLastView") }
+    }
+
+    /// Playback speed (1/2/4×) — one preference shared across cameras.
+    static var playbackSpeed: Int {
+        get {
+            let v = UserDefaults.standard.integer(forKey: "playbackSpeed")
+            return [1, 2, 4].contains(v) ? v : 1
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "playbackSpeed") }
+    }
 }
 
 // MARK: - Shared helpers

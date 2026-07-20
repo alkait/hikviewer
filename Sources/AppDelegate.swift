@@ -21,6 +21,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// returns to this origin view with its panes restored.
     private var promotedOrigin: (index: Int, wasPlayback: Bool, position: Date?)?
     private var selector: SupplementarySelector?
+    private var helpView: ShortcutHelpView?
+    /// Host of the currently focused camera — focusChanged needs to know
+    /// which view it is leaving to record that view's state.
+    private var focusedHost: String?
+    /// Set around focus changes the app makes itself (promote, back,
+    /// rebuild): focusChanged then neither records nor restores view state —
+    /// the caller manages it.
+    private var programmaticNav = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.applicationIconImage = makeAppIcon()
@@ -87,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if Settings.isConfigured && !Settings.cameras.isEmpty {
             rebuildStreams()
+            restoreSession()
         } else {
             emptyLabel.isHidden = false
             settings.show()
@@ -147,10 +156,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func rebuildStreams() {
         if let pb = playback { pb.exit(); playback = nil }
         closeSelector()
+        closeHelp()
         supp.teardown()
         promotedOrigin = nil
         nvrClient = nil      // pick up NVR credential changes lazily
+        // Programmatic: a Settings save shouldn't rewrite the outgoing view's
+        // remembered state; quitting later records the grid anyway.
+        programmaticNav = true
         grid.focused = nil   // while tiles/streams are still in sync
+        programmaticNav = false
+        focusedHost = nil
         grid.clearKeyCursor()
         let old = streams
         streams = []
@@ -229,11 +244,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// running underneath so the grid — and an unfocus — are instant. The tile
     /// swaps to the main feed on its first (key)frame, so there's no blank gap.
     func focusChanged(_ idx: Int?) {
+        let outgoing = focusedHost
+        let host: String? = idx.flatMap { $0 < streams.count ? streams[$0].camera.host : nil }
+        focusedHost = host
+        // Remember the outgoing view (before its playback/panes are torn
+        // down) and where the user is now. Promoted views are excluded: they
+        // were recorded as their origin when the pane was promoted.
+        if !programmaticNav, promotedOrigin == nil {
+            if let out = outgoing { saveViewState(host: out) }
+            SessionStore.update {
+                $0.location = host == nil ? .grid : .camera
+                $0.cameraHost = host
+            }
+        }
         if let pb = playback { pb.exit(); playback = nil }
         closeSelector()
         // Panes survive playback exits on the same camera; any other focus
         // change tears them down (their layout is saved for restore).
-        let host: String? = idx.flatMap { $0 < streams.count ? streams[$0].camera.host : nil }
         if supp.attachedHost != host { supp.teardown() }
         if idx == nil { promotedOrigin = nil }
         if let old = mainStream {
@@ -249,24 +276,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             t.zoomEnabled = (i == idx)
             if i != idx, t.isZoomed { t.resetZoom() }
         }
-        guard let i = idx, channel != mainChannel, i < streams.count, let ff = ffmpegPath else { return }
-        let cam = streams[i].camera
-        let tile = grid.tiles[i]
-        let ms = CameraStream(camera: cam, url: rtspURL(camera: cam, channel: mainChannel),
-                              channelId: mainChannel, ffmpegPath: ff)
-        ms.onSample = { [weak tile] sb, sync in
-            guard let tile else { return }
-            tile.setFeed(.main)  // no-op after the first frame
-            tile.enqueue(sb, isSync: sync, from: .main)
+        if let i = idx, channel != mainChannel, i < streams.count, let ff = ffmpegPath {
+            let cam = streams[i].camera
+            let tile = grid.tiles[i]
+            let ms = CameraStream(camera: cam, url: rtspURL(camera: cam, channel: mainChannel),
+                                  channelId: mainChannel, ffmpegPath: ff)
+            ms.onSample = { [weak tile] sb, sync in
+                guard let tile else { return }
+                tile.setFeed(.main)  // no-op after the first frame
+                tile.enqueue(sb, isSync: sync, from: .main)
+            }
+            ms.onState = { [weak tile] s in tile?.setStatus(s) }
+            mainStream = ms
+            ms.start()
         }
-        ms.onState = { [weak tile] s in tile?.setStatus(s) }
-        mainStream = ms
-        ms.start()
+        restoreViewState(idx: idx, outgoing: outgoing)
+    }
+
+    // MARK: remembering where the user left off
+
+    /// Record how `host`'s camera view looks right now. The last playback
+    /// position survives a return to live, so P can resume from it.
+    private func saveViewState(host: String, position: Date? = nil) {
+        let inPlayback = playback != nil
+        let pos = inPlayback ? (position ?? playback?.currentPosition)
+                             : SessionStore.state.perCamera[host]?.playbackPosition
+        let panes = supp.count > 0
+        SessionStore.update {
+            $0.perCamera[host] = CameraViewState(mode: inPlayback ? .playback : .live,
+                                                 playbackPosition: pos, panesVisible: panes)
+        }
+    }
+
+    /// A camera view just opened fresh (from the grid or at launch): bring
+    /// back its panes and, if it was left in playback, the position. Skipped
+    /// for same-camera re-entries (leaving playback) and promote/back
+    /// navigation, which manage their own state.
+    private func restoreViewState(idx: Int?, outgoing: String?) {
+        guard !programmaticNav, Settings.rememberLastView, promotedOrigin == nil,
+              let i = idx, i < streams.count, i < grid.tiles.count else { return }
+        let host = streams[i].camera.host
+        guard host != outgoing, let st = SessionStore.state.perCamera[host] else { return }
+        if st.panesVisible {
+            supp.attach(to: grid.tiles[i], mainHost: host)
+            supp.restoreSaved()
+        }
+        if st.mode == .playback {
+            enterPlayback(startAt: st.playbackPosition)
+        }
+    }
+
+    /// At launch: reopen the grid or the camera view the user quit from.
+    /// Never a promoted view — a quit there was recorded as its origin.
+    private func restoreSession() {
+        guard Settings.rememberLastView else { return }
+        let s = SessionStore.state
+        guard s.location == .camera, let host = s.cameraHost,
+              let idx = streams.firstIndex(where: { $0.camera.host == host }) else { return }
+        grid.focused = idx      // focusChanged restores panes/playback
     }
 
     // MARK: playback (recorded footage from the NVR, on the focused tile)
 
     private func handleKey(_ e: NSEvent) -> Bool {
+        if e.charactersIgnoringModifiers == "?" {
+            toggleHelp()
+            return true
+        }
         // + on a focused view: add a supplementary pane (selector panel).
         if grid.focused != nil, let ch = e.charactersIgnoringModifiers, ch == "+" || ch == "=" {
             openSupplementarySelector()
@@ -286,6 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch ch {
             case " ": pb.togglePause(); return true
             case "c": pb.toggleCalendar(); return true
+            case "x": pb.cycleSpeed(); return true
             case "n":
                 if e.modifierFlags.contains(.shift) { pb.jumpToPreviousMotion() }
                 else { pb.jumpToNextMotion() }
@@ -295,7 +372,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         if e.charactersIgnoringModifiers?.lowercased() == "p", grid.focused != nil {
-            enterPlayback()
+            // Resume from the camera's remembered position, not "a minute ago".
+            var startAt: Date?
+            if Settings.rememberLastView, promotedOrigin == nil,
+               let i = grid.focused, i < streams.count {
+                startAt = SessionStore.state.perCamera[streams[i].camera.host]?.playbackPosition
+            }
+            enterPlayback(startAt: startAt)
             return true
         }
         return false
@@ -335,7 +418,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let pb = PlaybackController(camera: cam, track: NVRClient.track(forChannel: ch),
                                         client: client, tile: tile)
             pb.onTransport = { [weak self] pos, speed, paused in
-                guard let self, let client = self.nvrClient else { return }
+                guard let self else { return }
+                // Every play/seek/pause refreshes the remembered position
+                // (crash insurance; a clean quit records it exactly).
+                if self.promotedOrigin == nil { self.saveViewState(host: cam.host, position: pos) }
+                guard let client = self.nvrClient else { return }
                 self.supp.playbackTransport(position: pos, speed: speed, paused: paused, client: client)
             }
             self.playback = pb
@@ -424,14 +511,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Double-click on a pane: open that camera as a plain standard view at
     /// the same moment (no panes there, adding disabled), with a way back.
     private func promoteSupplementary(_ camera: Camera) {
-        guard promotedOrigin == nil, let cur = grid.focused,
+        guard promotedOrigin == nil, let cur = grid.focused, cur < streams.count,
               let target = streams.firstIndex(where: { $0.camera.host == camera.host }),
               target != cur else { return }
         let wasPlayback = playback != nil
         let position = playback?.currentPosition
+        // The promoted view counts as its origin for "where you left off":
+        // record the origin's state (playback and panes still live here) so
+        // a quit from the promoted view reopens the origin, never this view.
+        let originHost = streams[cur].camera.host
+        saveViewState(host: originHost, position: position)
+        SessionStore.update { $0.location = .camera; $0.cameraHost = originHost }
         promotedOrigin = (cur, wasPlayback, position)
+        programmaticNav = true
         supp.teardown()              // saves the layout for the way back
         grid.focused = target        // tears down the origin's playback
+        programmaticNav = false
         if wasPlayback { enterPlayback(startAt: position) }
         updateBackArrow()
     }
@@ -439,12 +534,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func goBackFromPromoted() {
         guard let origin = promotedOrigin else { return }
         promotedOrigin = nil
+        programmaticNav = true       // this restore path works even with "remember" off
         grid.focused = origin.index
+        programmaticNav = false
         guard let i = grid.focused, i < grid.tiles.count, i < streams.count else { return }
         supp.attach(to: grid.tiles[i], mainHost: streams[i].camera.host)
         supp.restoreSaved()
         if origin.wasPlayback { enterPlayback(startAt: origin.position) }
         updateBackArrow()
+    }
+
+    // MARK: shortcut help (?)
+
+    private func toggleHelp() {
+        if helpView != nil { closeHelp(); return }
+        let context: HelpContext = playback != nil ? .playback
+                                 : grid.focused != nil ? .camera : .grid
+        let v = ShortcutHelpView(context: context)
+        v.onClose = { [weak self] in self?.closeHelp() }
+        v.frame = grid.bounds
+        v.autoresizingMask = [.width, .height]
+        grid.addSubview(v)
+        helpView = v
+        window.makeFirstResponder(v)
+    }
+
+    private func closeHelp() {
+        guard let v = helpView else { return }
+        v.removeFromSuperview()
+        helpView = nil
+        window.makeFirstResponder(grid)
     }
 
     /// The translucent back arrow shows only when Esc's next action would
@@ -457,6 +576,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Record where the user quit. A promoted view was already recorded
+        // as its origin at promote time — leave that in place.
+        if promotedOrigin == nil {
+            if let i = grid.focused, i < streams.count {
+                let host = streams[i].camera.host
+                saveViewState(host: host)   // exact playback position at quit
+                SessionStore.update { $0.location = .camera; $0.cameraHost = host }
+            } else {
+                SessionStore.update { $0.location = .grid; $0.cameraHost = nil }
+            }
+        }
         playback?.exit()
         mainStream?.stop()
         streams.forEach { $0.stop() }

@@ -101,6 +101,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private let nvrUserField = NSTextField(string: "")
     private let nvrPassField = NSSecureTextField(string: "")
     private let fullScreenCheck = NSButton(checkboxWithTitle: "Always start in full screen", target: nil, action: nil)
+    private let rememberCheck = NSButton(checkboxWithTitle: "Remember where I left off (open view, playback position)", target: nil, action: nil)
     var onSave: (() -> Void)?
 
     init() {
@@ -165,6 +166,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             tableButtons,
             nvrRow,
             fullScreenCheck,
+            rememberCheck,
             actions,
         ])
         stack.orientation = .vertical
@@ -196,6 +198,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         nvrUserField.stringValue = Settings.nvr?.user ?? "admin"
         nvrPassField.stringValue = Settings.nvr?.password ?? ""
         fullScreenCheck.state = Settings.startFullScreen ? .on : .off
+        rememberCheck.state = Settings.rememberLastView ? .on : .off
         table.reloadData()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
@@ -256,6 +259,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     @objc private func saveTapped() {
         guard !cams.isEmpty else { NSSound.beep(); return }
         Settings.startFullScreen = fullScreenCheck.state == .on
+        Settings.rememberLastView = rememberCheck.state == .on
         let nvrHost = nvrHostField.stringValue.trimmingCharacters(in: .whitespaces)
         let nvrUser = nvrUserField.stringValue.trimmingCharacters(in: .whitespaces)
         let nvr: StoredNVR? = nvrHost.isEmpty ? nil : StoredNVR(

@@ -116,11 +116,18 @@ accept the slower alarm-log motion.
 | Arrow keys | move a red selection cursor between tiles (fades after 5 s) |
 | `Return` | focus the selected tile |
 | Long-press + drag a tile | reorder the grid (order is saved); `Esc` cancels |
+| `?` | keyboard shortcut help |
 | `Cmd-,` | Settings |
 | `Cmd-Q` | quit |
 
 The app can start in full screen — controlled by the "Always start in full
 screen" checkbox in Settings (on by default).
+
+It also reopens where you left off: the grid, or the camera view you quit
+from — including its supplementary panes and, if it was in playback, the
+date and timeline position. Quitting from a view opened by double-clicking a
+supplementary pane reopens the *original* camera instead. Controlled by the
+"Remember where I left off" checkbox in Settings (on by default).
 
 ### Digital zoom (focused view, live or playback)
 
@@ -145,12 +152,13 @@ to bring back the previous set.
 
 ### Playback (recorded footage from the NVR)
 
-On a **focused** tile press **`P`**. A bar appears at the bottom: play/pause,
-the date (click for a **calendar** — days with recordings are teal), a
-24-hour timeline with recorded ranges in teal and motion in red, a zoom
-button, and a speed button (1× → 2× → 4×). Click the timeline to jump
-anywhere; the live substream keeps running underneath, so `Esc` back to live
-is instant.
+On a **focused** tile press **`P`** — playback resumes from that camera's
+last position. A bar appears at the bottom: play/pause, the date (click for
+a **calendar** — days with recordings are teal), a 24-hour timeline with
+recorded ranges in teal and motion in red, a zoom button, and a speed button
+(1× → 2× → 4×, also the `X` key — one remembered choice shared by all
+cameras). Click the timeline to jump anywhere; the live substream keeps
+running underneath, so `Esc` back to live is instant.
 
 ![Playback with motion painted on the timeline](docs/playback.jpg)
 
@@ -159,6 +167,7 @@ is instant.
 | `Space` | pause / resume |
 | `←` / `→` | seek ±10 s (`Shift`: ±60 s, `Cmd`: ±15 min) |
 | `0`–`9` | jump to that tenth of the footage in view (YouTube style) |
+| `X` | cycle speed 1× / 2× / 4× |
 | `N` / `Shift-N` | next / previous motion block |
 | `C` | calendar |
 | `P` or `Esc` | back to live |
@@ -170,7 +179,7 @@ is instant.
   the NVR's Human/Vehicle checkboxes (both **on** by default → AcuSense
   smart search; needs the NVR permission described above). With both off, all
   motion is shown from the NVR's alarm log — slower to load, cached per day.
-  Each camera remembers its filter choice.
+  The filter choice is shared across cameras and remembered.
 - Playback pauses when it reaches the live edge or a gap with nothing after
   it. No per-camera setup is needed: the app asks the NVR which channel each
   camera is plugged into and matches it to your camera list; a camera the NVR
