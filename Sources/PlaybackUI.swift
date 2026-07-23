@@ -6,7 +6,7 @@ import AppKit
 
 /// Zoomable timeline strip: shows a window [winStart, winStart+winDuration]
 /// of the day — the full 24 h by default. Time labels along the top, recorded
-/// segments as a teal band, a red "now" marker, and a white cursor for the
+/// segments as a teal band, red motion highlights, and a white cursor for the
 /// playback position. Tick/label density adapts to the zoom level, and lines
 /// are drawn light over the dark background and dark over the teal band so
 /// they read everywhere. Click or drag anywhere to seek (fires on mouse-up so
@@ -157,12 +157,15 @@ final class TimelineStrip: NSView {
             head.fill()
         }
 
-        // "Now" marker (red, like the icon's live dot) when it's in view.
-        let now = Date()
-        if now >= winStart, now < winEnd {
-            NSColor(calibratedRed: 0.95, green: 0.27, blue: 0.25, alpha: 1).setFill()
-            NSRect(x: x(for: now) - 0.75, y: bandY, width: 1.5, height: bandH).fill()
-        }
+        // "Now" marker — removed: it read as a phantom motion tick (near-
+        // identical red) and crawled rightward on every redraw even while
+        // paused. Esc/P (live) and T (today) cover the "get me to now" need.
+        // Restore by uncommenting; restyle it first if it comes back.
+        // let now = Date()
+        // if now >= winStart, now < winEnd {
+        //     NSColor(calibratedRed: 0.95, green: 0.27, blue: 0.25, alpha: 1).setFill()
+        //     NSRect(x: x(for: now) - 0.75, y: bandY, width: 1.5, height: bandH).fill()
+        // }
 
         if let c = cursor, c >= winStart, c <= winEnd {
             NSColor.white.setFill()
