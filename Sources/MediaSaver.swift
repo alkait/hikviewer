@@ -137,9 +137,13 @@ enum MediaSaver {
     }
 }
 
-/// One in-flight clip recording: an ffmpeg stream-copy pull (a second RTSP
-/// session — live from the camera, playback from the NVR at 1×) independent
-/// of the viewing pipeline, so pausing/seeking never disturbs the file.
+/// One in-flight clip recording: an ffmpeg stream-copy mux independent of
+/// the viewing pipeline, so pausing/seeking never disturbs the file. Input
+/// is either ffmpeg's own RTSP pull (live from the camera, playback from
+/// the NVR at 1×) or — for fast playback, where ffmpeg can't send the
+/// `Scale:` header — Annex B NALs pushed in through feed() from a native
+/// PlaybackStream session, stamped by arrival time so the clip plays back
+/// at the watched speed.
 final class ClipRecorder {
     let fileURL: URL
     let startedAt = Date()
@@ -150,6 +154,7 @@ final class ClipRecorder {
 
     private let process = Process()
     private var forceKill: DispatchWorkItem?
+    private var pipeIn: FileHandle?     // piped mode only
 
     init?(inputURL: String, codec: VideoCodec, fileURL: URL) {
         guard let ff = ffmpegPath else { return nil }
@@ -167,14 +172,53 @@ final class ClipRecorder {
         }
     }
 
+    /// Piped mode (fast playback): raw elementary stream on stdin, wall-clock
+    /// timestamps — the NVR paces delivery at scale×, so arrival time IS the
+    /// intended playback pace.
+    init?(pipedCodec codec: VideoCodec, fileURL: URL) {
+        guard let ff = ffmpegPath else { return nil }
+        self.fileURL = fileURL
+        process.executableURL = URL(fileURLWithPath: ff)
+        var args = ["-hide_banner", "-loglevel", "error",
+                    "-use_wallclock_as_timestamps", "1",
+                    "-f", codec == .hevc ? "hevc" : "h264", "-i", "pipe:0",
+                    "-an", "-c:v", "copy"]
+        if codec == .hevc { args += ["-tag:v", "hvc1"] }
+        args += ["-f", "mp4", "-movflags", "frag_keyframe+empty_moov", "-y", fileURL.path]
+        process.arguments = args
+        let pipe = Pipe()
+        process.standardInput = pipe
+        pipeIn = pipe.fileHandleForWriting
+        // EPIPE as an error, not a process-killing SIGPIPE, if ffmpeg dies.
+        _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+        process.standardError = ProcessInfo.processInfo.environment["HIK_DEBUG"] != nil
+            ? FileHandle.standardError : FileHandle.nullDevice
+        process.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async { self?.finished() }
+        }
+    }
+
+    /// Piped mode: push video bytes (any thread; blocking write).
+    func feed(_ data: Data) {
+        guard let pipeIn, process.isRunning else { return }
+        try? pipeIn.write(contentsOf: data)
+    }
+
     func start() -> Bool {
         do { try process.run(); return true } catch { return false }
     }
 
     /// SIGINT lets ffmpeg finish the file cleanly; a laggard gets SIGTERM.
+    /// Piped mode instead closes stdin — EOF is the clean shutdown there,
+    /// and ffmpeg finalizes the file after draining what's buffered.
     func stop() {
         guard process.isRunning else { return }
-        process.interrupt()
+        if let pipeIn {
+            self.pipeIn = nil
+            try? pipeIn.close()
+        } else {
+            process.interrupt()
+        }
         let kill = DispatchWorkItem { [process] in if process.isRunning { process.terminate() } }
         forceKill = kill
         DispatchQueue.global().asyncAfter(deadline: .now() + 3, execute: kill)

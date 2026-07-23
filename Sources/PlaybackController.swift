@@ -80,6 +80,7 @@ final class PlaybackController {
         tile.addSubview(bar)
         bar.onSeek = { [weak self] t in self?.seek(to: t) }
         bar.onCalendarOpen = { [weak self] in self?.calendarOpened() }
+        bar.onToday = { [weak self] in self?.jumpToToday() }
         bar.onMonthStep = { [weak self] d in self?.stepMonth(d) }
         bar.onPickDay = { [weak self] d in self?.pickDay(d) }
         bar.onSpeedTap = { [weak self] in self?.cycleSpeed() }
@@ -151,6 +152,19 @@ final class PlaybackController {
     }
 
     func toggleCalendar() { bar.toggleCalendar() }
+
+    /// T: jump to today's live edge, calendar open or closed. A HUD confirms
+    /// either way ("Today" / "Already on today").
+    func jumpToToday() {
+        let now = Date()
+        guard !cal.isDate(day, inSameDayAs: now) else {
+            if let tile { HUDView.flash("Already on today", in: tile) }
+            return
+        }
+        bar.closeCalendar()
+        seek(to: now.addingTimeInterval(-60))    // same "a minute back" as entering playback
+        if let tile { HUDView.flash("Today", in: tile) }
+    }
 
     /// Amber pins on the timeline: this camera's bookmarks within the
     /// displayed day. Called on day changes and after adding a bookmark.
@@ -340,17 +354,23 @@ final class PlaybackController {
     }
 
     /// N: jump to the next motion block after the current position — within
-    /// the displayed day only; at the day's last block it does nothing.
+    /// the displayed day only; past the day's last block a HUD says so.
     func jumpToNextMotion() {
         let pos = position()
-        guard let next = motionSpans.first(where: { $0.start > pos.addingTimeInterval(1) }) else { return }
+        guard let next = motionSpans.first(where: { $0.start > pos.addingTimeInterval(1) }) else {
+            if let tile { HUDView.flash("No more motion", in: tile) }
+            return
+        }
         seek(to: next.start)
     }
 
     /// Shift-N: back to the previous motion block (same day-bounded rules).
     func jumpToPreviousMotion() {
         let pos = position()
-        guard let prev = motionSpans.last(where: { $0.start < pos.addingTimeInterval(-1) }) else { return }
+        guard let prev = motionSpans.last(where: { $0.start < pos.addingTimeInterval(-1) }) else {
+            if let tile { HUDView.flash("No earlier motion", in: tile) }
+            return
+        }
         seek(to: prev.start)
     }
 

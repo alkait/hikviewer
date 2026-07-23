@@ -485,7 +485,8 @@ final class SupplementarySelector: NSView {
         if event.keyCode == 36 || event.keyCode == 76 { // return: selection, else top match
             let pool = visibleEntries
             if let s = selIndex, s < pool.count {
-                if pool[s].enabled { onPick?(pool[s].camera) } else { NSSound.beep() }
+                if pool[s].enabled { onPick?(pool[s].camera) }
+                else { HUDView.flash(pool[s].note == "added" ? "Already added" : "No recording", in: self) }
             } else if let first = pool.first(where: { $0.enabled }) {
                 onPick?(first.camera)
             }

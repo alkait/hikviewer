@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// In-flight clip recording (R); at most one, tied to the camera it
     /// started on — leaving that camera stops it.
     private var recorder: ClipRecorder?
+    /// Fast-playback recording's own Scale: session feeding the recorder.
+    private var recStream: PlaybackStream?
     private var recTimer: Timer?
     private weak var recTile: TileView?
     private var recHost: String?
@@ -121,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Export the full config (cameras + NVR, credentials included) to JSON.
     @objc func exportCameras(_ sender: Any?) {
-        guard !Settings.stored.isEmpty else { NSSound.beep(); return }
+        guard !Settings.stored.isEmpty else { flashHUD("No cameras to export"); return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "hik-cameras.json"
         panel.allowedContentTypes = [.json]
@@ -355,6 +357,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: playback (recorded footage from the NVR, on the focused tile)
 
+    /// Centered transient feedback (instead of beeps): on the focused tile
+    /// when there is one, else over the whole window.
+    private func flashHUD(_ text: String) {
+        if let i = grid.focused, i < grid.tiles.count { HUDView.flash(text, in: grid.tiles[i]) }
+        else if let v = window.contentView { HUDView.flash(text, in: v) }
+    }
+
     private func handleKey(_ e: NSEvent) -> Bool {
         if e.charactersIgnoringModifiers == "?" {
             toggleHelp()
@@ -373,7 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // - closes panes, most recently added first.
         if grid.focused != nil, let ch = e.charactersIgnoringModifiers, ch == "-" || ch == "_" {
-            if supp.count > 0 { supp.removeLastPane() } else { NSSound.beep() }
+            if supp.count > 0 { supp.removeLastPane() } else { flashHUD("No panes to close") }
             return true
         }
         if let pb = playback {
@@ -390,6 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch ch {
             case " ": pb.togglePause(); return true
             case "c": pb.toggleCalendar(); return true
+            case "t": pb.jumpToToday(); return true
             case "x": pb.cycleSpeed(); return true
             case "s": saveSnapshot(); return true
             case "r": toggleRecording(); return true
@@ -479,11 +489,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: supplementary panes (+ to add, double-click to promote)
 
     private func openSupplementarySelector() {
-        guard selector == nil, promotedOrigin == nil, supp.count < 4,
-              let i = grid.focused, i < grid.tiles.count, i < streams.count else {
-            NSSound.beep()
-            return
-        }
+        guard selector == nil else { return }           // panel already up
+        guard promotedOrigin == nil else { flashHUD("No panes on a promoted view"); return }
+        guard supp.count < 4 else { flashHUD("Pane limit reached"); return }
+        guard let i = grid.focused, i < grid.tiles.count, i < streams.count else { return }
         let tile = grid.tiles[i]
         let mainHost = streams[i].camera.host
         let added = Set(supp.paneHosts)
@@ -657,7 +666,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func jumpToBookmark(_ b: Bookmark) {
         closeBookmarkUI()
         guard let target = streams.firstIndex(where: { $0.camera.host == b.host }) else {
-            NSSound.beep()      // camera no longer configured
+            flashHUD("Camera no longer configured")
             return
         }
         if grid.focused == target {
@@ -676,6 +685,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func saveSnapshotMenu(_ sender: Any?) { saveSnapshot() }
 
+    /// Snapshot/record need a focused camera — grey the menu items out
+    /// instead of letting them no-op (Stop Recording stays available while
+    /// a recording is running).
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(saveSnapshotMenu(_:)):
+            return grid.focused != nil
+        case #selector(toggleRecordingMenu(_:)):
+            return grid.focused != nil || recorder != nil
+        default:
+            return true
+        }
+    }
+
     @objc func toggleRecordingMenu(_ sender: Any?) { toggleRecording() }
 
     /// S: still of the focused camera — live grabs the camera's full-res
@@ -684,10 +707,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// a temp file the moment S is pressed, in parallel with the save panel,
     /// so naming the file doesn't shift the captured moment.
     private func saveSnapshot() {
-        guard let i = grid.focused, i < streams.count, i < grid.tiles.count else {
-            NSSound.beep()
-            return
-        }
+        // No focused camera: the menu item is disabled and the shortcut isn't
+        // routed here, so this is a belt-and-braces silent no-op.
+        guard let i = grid.focused, i < streams.count, i < grid.tiles.count else { return }
         let cam = streams[i].camera
         let tile = grid.tiles[i]
         tile.flash()             // the shutter flash marks the captured moment
@@ -739,40 +761,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// R: toggle clip recording of the focused camera. Recording starts the
     /// moment R is pressed, into a temp file; the save panel appears when it
     /// stops (Cancel discards the clip). Live records the main stream;
-    /// playback records from the current position at 1×, unaffected by
+    /// playback records from the current position at the speed set when R
+    /// was pressed (a 4× clip plays back 4× fast), unaffected by
     /// pausing/seeking while it runs.
     private func toggleRecording() {
         if recorder != nil {
             stopRecording()
             return
         }
-        guard let i = grid.focused, i < streams.count, i < grid.tiles.count else {
-            NSSound.beep()
-            return
-        }
+        // No focused camera: menu item disabled, shortcut not routed — no-op.
+        guard let i = grid.focused, i < streams.count, i < grid.tiles.count else { return }
         let cam = streams[i].camera
         let tile = grid.tiles[i]
-        let input: String
+        let temp = MediaSaver.tempURL(ext: "mp4")
+        var maybeRec: ClipRecorder?
+        var stream: PlaybackStream?     // fast playback's own Scale: session
         let stamp: Date
         let tz: TimeZone?
         if let pb = playback, let client = nvrClient, let ch = client.channelByHost[cam.host] {
             let pos = pb.currentPosition
-            let (path, _) = client.playbackRequest(track: NVRClient.track(forChannel: ch),
-                                                   from: pos, to: pos.addingTimeInterval(6 * 3600))
-            input = MediaSaver.playbackURL(client: client, path: path)
+            let (path, startClock) = client.playbackRequest(track: NVRClient.track(forChannel: ch),
+                                                            from: pos, to: pos.addingTimeInterval(6 * 3600))
             stamp = pos
             tz = client.timeZone
+            if pb.currentSpeed > 1 {
+                // ffmpeg can't send the RTSP Scale: header, so fast playback
+                // records through a native session piping NALs into ffmpeg.
+                if let rec = ClipRecorder(pipedCodec: cam.codec, fileURL: temp) {
+                    let s = PlaybackStream(host: client.nvr.host, port: client.nvr.rtspPort,
+                                           user: client.nvr.user, password: client.nvr.password,
+                                           path: path, startClock: startClock,
+                                           scale: pb.currentSpeed, codec: cam.codec)
+                    s.onNAL = { [weak rec] d in rec?.feed(d) }
+                    s.onEnded = { [weak self] in self?.stopRecording() }   // footage ran out
+                    maybeRec = rec
+                    stream = s
+                }
+            } else {
+                maybeRec = ClipRecorder(inputURL: MediaSaver.playbackURL(client: client, path: path),
+                                        codec: cam.codec, fileURL: temp)
+            }
         } else {
-            input = rtspURL(camera: cam, channel: mainChannel)
             stamp = Date()
             tz = nil
+            maybeRec = ClipRecorder(inputURL: rtspURL(camera: cam, channel: mainChannel),
+                                    codec: cam.codec, fileURL: temp)
         }
         let name = MediaSaver.defaultName(camera: cam.name, date: stamp, timeZone: tz, ext: "mp4")
-        let temp = MediaSaver.tempURL(ext: "mp4")
-        guard let rec = ClipRecorder(inputURL: input, codec: cam.codec, fileURL: temp), rec.start() else {
+        guard let rec = maybeRec, rec.start() else {
             tile.setStatus("recording failed to start")
             return
         }
+        stream?.start()
+        recStream = stream
         recDefaultName = name
         rec.onFinish = { [weak self, weak tile] ok in
             guard let self else { return }
@@ -783,6 +824,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             else { tile?.setStatus("recording failed") }
             if self.recorder === rec {
                 self.recorder = nil
+                self.recStream?.stop()   // ffmpeg died on its own — drop the feed
+                self.recStream = nil
                 self.recTile = nil
                 self.recHost = nil
                 self.recDefaultName = nil
@@ -812,12 +855,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MediaSaver.reveal(url)
             } catch {
                 try? FileManager.default.removeItem(at: temp)
-                NSSound.beep()
+                self.flashHUD("Couldn't save the clip")
             }
         }
     }
 
     private func stopRecording() {
+        recStream?.stop()        // stop the feed first so ffmpeg sees a quiet EOF
+        recStream = nil
         recorder?.stop()         // onFinish does the cleanup when ffmpeg exits
     }
 
@@ -846,6 +891,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the Desktop under its default name — no save panel mid-terminate.
         if let rec = recorder {
             rec.onFinish = nil
+            recStream?.stop()
             rec.stopAndWait()
             if (MediaSaver.fileSize(rec.fileURL) ?? 0) > 4096 {
                 let dest = MediaSaver.uniqueDesktopURL(name: recDefaultName ?? rec.fileURL.lastPathComponent)

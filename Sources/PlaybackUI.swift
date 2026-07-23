@@ -215,10 +215,56 @@ final class TimelineStrip: NSView {
 final class MonthCalendarView: NSView {
     var onPickDay: ((Int) -> Void)?
     var onMonthStep: ((Int) -> Void)?
+    /// T pressed while the popover holds key focus — the grid's key handler
+    /// never sees it, so the calendar forwards it itself.
+    var onToday: (() -> Void)?
 
     private let title = NSTextField(labelWithString: "")
     private let daysGrid = NSStackView()
     private static let cellW: CGFloat = 28, cellH: CGFloat = 22
+
+    // Keyboard navigation: arrows move a cursor over the days (±1 / ±7,
+    // crossing into the neighbouring month at the edges), Return picks it.
+    private var cursor: Int?
+    private var pendingCursor: Int?     // set before a month step; -1 = last day
+    private var monthTitle = ""
+    private var leadingBlanks = 0
+    private var daysInMonth = 0
+    private var enabledDays: Set<Int> = []
+    private var selectedDay: Int?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.specialKey {
+        case .leftArrow: moveCursor(-1); return
+        case .rightArrow: moveCursor(1); return
+        case .upArrow: moveCursor(-7); return
+        case .downArrow: moveCursor(7); return
+        case .carriageReturn, .enter:
+            if let c = cursor, enabledDays.contains(c) { onPickDay?(c) }
+            else { HUDView.flash("No recordings that day", in: self) }
+            return
+        default: break
+        }
+        if event.charactersIgnoringModifiers?.lowercased() == "t" { onToday?(); return }
+        super.keyDown(with: event)
+    }
+
+    private func moveCursor(_ delta: Int) {
+        guard daysInMonth > 0 else { return }
+        let next = (cursor ?? selectedDay ?? 1) + delta
+        if next < 1 { pendingCursor = -1; onMonthStep?(-1); return }
+        if next > daysInMonth { pendingCursor = 1; onMonthStep?(1); return }
+        cursor = next
+        render()
+    }
+
+    /// Popover (re)opened — keyboard navigation starts from the selected day.
+    func resetCursor() {
+        cursor = nil
+        pendingCursor = nil
+    }
 
     init() {
         super.init(frame: .zero)
@@ -264,6 +310,21 @@ final class MonthCalendarView: NSView {
     required init?(coder: NSCoder) { fatalError("unused") }
 
     func show(monthTitle: String, leadingBlanks: Int, daysInMonth: Int, enabled: Set<Int>, selected: Int?) {
+        self.monthTitle = monthTitle
+        self.leadingBlanks = leadingBlanks
+        self.daysInMonth = daysInMonth
+        enabledDays = enabled
+        selectedDay = selected
+        if let p = pendingCursor {                  // landed after a month step
+            cursor = p == -1 ? daysInMonth : min(p, daysInMonth)
+            pendingCursor = nil
+        } else if let c = cursor, c > daysInMonth {
+            cursor = daysInMonth
+        }
+        render()
+    }
+
+    private func render() {
         title.stringValue = monthTitle
         daysGrid.arrangedSubviews.forEach { daysGrid.removeArrangedSubview($0); $0.removeFromSuperview() }
         var day = 1 - leadingBlanks
@@ -271,7 +332,7 @@ final class MonthCalendarView: NSView {
             let row = NSStackView()
             row.spacing = 2
             for _ in 0..<7 {
-                row.addArrangedSubview(cell(day, daysInMonth: daysInMonth, enabled: enabled, selected: selected))
+                row.addArrangedSubview(cell(day, daysInMonth: daysInMonth, enabled: enabledDays, selected: selectedDay))
                 day += 1
             }
             daysGrid.addArrangedSubview(row)
@@ -311,6 +372,13 @@ final class MonthCalendarView: NSView {
                 b.layer?.borderWidth = 1.5
             }
         }
+        // The keyboard cursor ring sits on top of everything, dim days too —
+        // red, matching the grid's keyboard cursor.
+        if day == cursor {
+            b.layer?.cornerRadius = 5
+            b.layer?.borderColor = NSColor.systemRed.cgColor
+            b.layer?.borderWidth = 2
+        }
         return b
     }
 
@@ -331,6 +399,8 @@ final class PlaybackBarView: NSView {
         set { calendar.onMonthStep = newValue }
     }
     var onPickDay: ((Int) -> Void)?
+    /// T from inside the open calendar popover.
+    var onToday: (() -> Void)?
     var onSpeedTap: (() -> Void)?
     var onPlayPause: (() -> Void)?
     var onZoomTap: (() -> Void)?
@@ -412,6 +482,7 @@ final class PlaybackBarView: NSView {
             self?.popover.performClose(nil)
             self?.onPickDay?(d)
         }
+        calendar.onToday = { [weak self] in self?.onToday?() }
 
         let stack = NSStackView(views: [playButton, dateButton, strip, humanButton, vehicleButton,
                                         spinner, timeLabel, zoomButton, speedButton])
@@ -491,13 +562,19 @@ final class PlaybackBarView: NSView {
     }
 
     @objc private func showCalendar() {
+        calendar.resetCursor()
         onCalendarOpen?()
         popover.show(relativeTo: dateButton.bounds, of: dateButton, preferredEdge: .maxY)
+        calendar.window?.makeFirstResponder(calendar)   // so T/arrows reach the calendar
     }
 
     /// Keyboard shortcut entry: open the calendar, or close it if it's up.
     func toggleCalendar() {
         if popover.isShown { popover.performClose(nil) } else { showCalendar() }
+    }
+
+    func closeCalendar() {
+        if popover.isShown { popover.performClose(nil) }
     }
 
     @objc private func speedTapped() { onSpeedTap?() }

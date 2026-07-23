@@ -30,7 +30,9 @@ final class GridView: NSView {
     override func keyDown(with event: NSEvent) {
         if onKey?(event) == true { return }
         if focused == nil, !isReordering, !tiles.isEmpty, handleGridKey(event) { return }
-        super.keyDown(with: event)
+        // Esc must keep riding the responder chain (it drives cancelOperation);
+        // every other unhandled key is swallowed so AppKit doesn't beep.
+        if event.keyCode == 53 { super.keyDown(with: event) }
     }
 
     // MARK: keyboard navigation (grid mode)

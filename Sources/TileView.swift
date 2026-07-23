@@ -396,14 +396,9 @@ final class TileView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
-            // Focused view: double-click toggles 2× zoom at the click point.
-            // In the grid it still focuses (via the app delegate's handler).
-            if zoomEnabled {
-                if isZoomed { resetZoom() }
-                else { setZoom(2, at: convert(event.locationInWindow, from: nil)) }
-            } else {
-                onDoubleClick?()
-            }
+            // Grid: double-click focuses (via the app delegate's handler).
+            // Focused view: nothing — zoom is pinch/scroll only.
+            if !zoomEnabled { onDoubleClick?() }
             return
         }
         pressStart = event.locationInWindow

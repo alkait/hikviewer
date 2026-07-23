@@ -79,7 +79,8 @@ final class CameraEditController: NSWindowController {
         let pass = passField.stringValue
         let port = Int(portField.stringValue.trimmingCharacters(in: .whitespaces)) ?? 0
         guard !host.isEmpty, !user.isEmpty, !pass.isEmpty, (1...65535).contains(port) else {
-            NSSound.beep(); return
+            if let v = window?.contentView { HUDView.flash("Host, user, password and port are required", in: v) }
+            return
         }
         var name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
         if name.isEmpty { name = host }
@@ -103,6 +104,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private let fullScreenCheck = NSButton(checkboxWithTitle: "Always start in full screen", target: nil, action: nil)
     private let rememberCheck = NSButton(checkboxWithTitle: "Remember where I left off (open view, playback position)", target: nil, action: nil)
     var onSave: (() -> Void)?
+
+    private func flashHUD(_ text: String) {
+        if let v = window?.contentView { HUDView.flash(text, in: v) }
+    }
 
     init() {
         let win = NSWindow(contentRect: .zero,
@@ -240,7 +245,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     @objc private func editCamera() {
         let row = table.selectedRow
-        guard row >= 0, row < cams.count else { NSSound.beep(); return }
+        guard row >= 0, row < cams.count else { flashHUD("Select a camera first"); return }
         editor.present(on: window!, editing: cams[row]) { [weak self] staged in
             self?.cams[row] = staged
             self?.table.reloadData()
@@ -249,7 +254,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     @objc private func removeCamera() {
         let row = table.selectedRow
-        guard row >= 0, row < cams.count else { NSSound.beep(); return }
+        guard row >= 0, row < cams.count else { flashHUD("Select a camera first"); return }
         cams.remove(at: row)
         table.reloadData()
     }
@@ -257,7 +262,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     @objc private func cancelTapped() { window?.close() }
 
     @objc private func saveTapped() {
-        guard !cams.isEmpty else { NSSound.beep(); return }
+        guard !cams.isEmpty else { flashHUD("Add at least one camera"); return }
         Settings.startFullScreen = fullScreenCheck.state == .on
         Settings.rememberLastView = rememberCheck.state == .on
         let nvrHost = nvrHostField.stringValue.trimmingCharacters(in: .whitespaces)

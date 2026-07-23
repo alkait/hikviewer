@@ -20,6 +20,9 @@ final class PlaybackStream {
     var onSample: ((CMSampleBuffer, _ isSync: Bool) -> Void)?
     var onState: ((String) -> Void)?      // main thread
     var onEnded: (() -> Void)?            // main thread
+    /// Raw tap (clip recording): set to receive depacketized Annex B NALs on
+    /// the worker thread instead of decoded samples; onSample never fires.
+    var onNAL: ((Data) -> Void)?
 
     private let host: String
     private let port: Int
@@ -209,6 +212,7 @@ final class PlaybackStream {
         guard !nal.isEmpty else { return }
         var annexB: [UInt8] = [0, 0, 0, 1]
         annexB += nal
+        if let onNAL { onNAL(Data(annexB)); return }
         parser.push(Data(annexB))
     }
 
